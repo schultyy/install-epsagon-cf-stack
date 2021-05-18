@@ -1,0 +1,227 @@
+{
+  "Description": "This stack grants read-only permission through a IAM Role to provide comprehensive monitoring to the AWS Account. For any question, you can contact us at the help widget.",
+  "Resources": {
+    "EpsagonRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "arn:aws:iam::066549572091:root"
+              },
+              "Action": ["sts:AssumeRole"],
+              "Condition": {
+                "StringEquals": {
+                  "sts:ExternalId": {
+                    "Ref": "ExternalId"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "appsync.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "RoleName": "EpsagonRole",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess",
+          "arn:aws:iam::aws:policy/AWSLambda_ReadOnlyAccess",
+          "arn:aws:iam::aws:policy/AWSStepFunctionsReadOnlyAccess",
+          "arn:aws:iam::aws:policy/AWSXrayReadOnlyAccess",
+          "arn:aws:iam::aws:policy/CloudWatchEventsFullAccess",
+          "arn:aws:iam::aws:policy/service-role/AWSAppSyncPushToCloudWatchLogs",
+          "arn:aws:iam::aws:policy/AWSAppSyncAdministrator"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "epsagon-policy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:PutSubscriptionFilter",
+                    "logs:DeleteSubscriptionFilter",
+                    "lambda:UpdateFunctionConfiguration",
+                    "batch:Describe*",
+                    "ecs:Describe*",
+                    "ecs:List*",
+                    "ec2:Describe*",
+                    "ec2:Get*",
+                    "application-autoscaling:Describe*",
+                    "autoscaling:Describe*",
+                    "elasticloadbalancing:Describe*",
+                    "iam:PassRole",
+                    "ecr:GetAuthorizationToken",
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
+                    "iam:ListAccountAliases"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "EpsagonReporter": {
+      "Type": "Custom::EpsagonReporter",
+      "Version": "1.0",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::Join": [
+            ":",
+            [
+              "arn:aws:sns",
+              {
+                "Ref": "AWS::Region"
+              },
+              "066549572091:cloudformation-status-production"
+            ]
+          ]
+        },
+        "RoleArn": {
+          "Fn::GetAtt": ["EpsagonRole", "Arn"]
+        },
+        "ExternalId": {
+          "Ref": "ExternalId"
+        }
+      }
+    },
+    "EpsagonTrailBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+          "PublicAccessBlockConfiguration": {
+            "BlockPublicPolicy": true,
+            "IgnorePublicAcls": true,
+            "BlockPublicAcls": true,
+            "RestrictPublicBuckets": true
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "ExpirationInDays": 1,
+              "Status": "Enabled"
+            }
+          ]
+        }
+      }
+    },
+    "EpsagonLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "EpsagonMonitoringLogGroup",
+        "RetentionInDays": 1
+      }
+    },
+    "EpsagonTrailBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "EpsagonTrailBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudtrail.amazonaws.com"
+              },
+              "Action": "s3:GetBucket*",
+              "Resource": {
+                "Fn::Sub": "arn:aws:s3:::${EpsagonTrailBucket}"
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudtrail.amazonaws.com"
+              },
+              "Action": "s3:PutObject",
+              "Resource": {
+                "Fn::Sub": "arn:aws:s3:::${EpsagonTrailBucket}/AWSLogs/${AWS::AccountId}/*"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "EpsagonCloudTrailToCloudWatchLogsRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Path": "/",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": ["cloudtrail.amazonaws.com"]
+              },
+              "Action": ["sts:AssumeRole"]
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "epsagon-cloudtrail-to-cloudwatchlogs-policy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": ["logs:PutLogEvents", "logs:CreateLogStream"],
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:EpsagonMonitoringLogGroup:log-stream:*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "EpsagonCloudTrail": {
+      "Type": "AWS::CloudTrail::Trail",
+      "DependsOn": ["EpsagonTrailBucketPolicy"],
+      "Properties": {
+        "IsLogging": true,
+        "IsMultiRegionTrail": true,
+        "IncludeGlobalServiceEvents": true,
+        "CloudWatchLogsLogGroupArn": {
+          "Fn::GetAtt": ["EpsagonLogGroup", "Arn"]
+        },
+        "CloudWatchLogsRoleArn": {
+          "Fn::GetAtt": ["EpsagonCloudTrailToCloudWatchLogsRole", "Arn"]
+        },
+        "S3BucketName": {
+          "Ref": "EpsagonTrailBucket"
+        },
+        "TrailName": "EpsagonMonitoringTrail",
+        "EventSelectors": [
+          {
+            "ReadWriteType": "WriteOnly"
+          }
+        ]
+      }
+    }
+  },
+  "Parameters": {
+    "ExternalId": {
+      "Description": "External ID for securing the role - Do not change",
+      "Type": "String"
+    }
+  }
+}
